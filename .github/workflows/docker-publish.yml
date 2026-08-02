@@ -29,8 +29,7 @@ jobs:
     permissions:
       contents: read
       packages: write
-      id-token: write      # keyless cosign signing
-      attestations: write  # build provenance
+      id-token: write  # keyless cosign signing
 
     steps:
       - name: Check out repository
@@ -85,14 +84,6 @@ jobs:
           cache-to: type=gha,mode=max
           provenance: true
           sbom: true
-
-      - name: Attest build provenance
-        if: github.event_name != 'pull_request'
-        uses: actions/attest-build-provenance@v2
-        with:
-          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          subject-digest: ${{ steps.build.outputs.digest }}
-          push-to-registry: true
 
       - name: Install cosign
         if: github.event_name != 'pull_request'

@@ -10,9 +10,15 @@
 services:
   jadx-mcp-server:
     image: ${IMAGE:-ghcr.io/applone/jadx-mcp-server}:${IMAGE_TAG:-latest}
+
+    # Prefer the image published to GHCR. Compose only falls back to building
+    # when you ask for it explicitly (`--build`, `docker compose build`, or
+    # PULL_POLICY=build in .env); the build stanza below exists for that case.
+    pull_policy: ${PULL_POLICY:-missing}
     build:
       context: .
       dockerfile: Dockerfile
+
     container_name: jadx-mcp-server
     restart: unless-stopped
 
@@ -44,9 +50,3 @@ services:
         limits:
           memory: ${MEMORY_LIMIT:-1g}
           cpus: "${CPU_LIMIT:-2}"
-
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"

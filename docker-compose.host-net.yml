@@ -1,0 +1,53 @@
+# Host-networking variant — for running the server on a remote box while
+# JADX-GUI stays on your workstation, reached over an SSH reverse tunnel.
+#
+#   docker compose -f docker-compose.host-net.yml up -d
+#
+# Why a separate file: a reverse tunnel (`ssh -R 8650:...`) binds the *server's*
+# loopback by default, which a bridge-networked container cannot reach. Sharing
+# the host's network namespace makes 127.0.0.1:8650 directly reachable. Docker
+# rejects published ports in this mode, so `ports:` is absent by necessity —
+# hence a standalone file rather than an override of docker-compose.yml.
+#
+# Everything still comes from .env. Set these there for this mode:
+#   JADX_HOST=127.0.0.1     # the tunnel endpoint on the server's loopback
+#   RELAY_BIND=127.0.0.1    # keep MCP off the server's public interfaces
+#
+# See the "Remote server + SSH tunnel" section of README.md for the full recipe.
+
+services:
+  jadx-mcp-server:
+    image: ${IMAGE:-ghcr.io/applone/jadx-mcp-server}:${IMAGE_TAG:-latest}
+
+    # Prefer the image published to GHCR. Compose only falls back to building
+    # when you ask for it explicitly (`--build`, `docker compose build`, or
+    # PULL_POLICY=build in .env); the build stanza below exists for that case.
+    pull_policy: ${PULL_POLICY:-missing}
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    container_name: jadx-mcp-server
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    # The container shares the host's network namespace, so it can reach the
+    # SSH tunnel on 127.0.0.1 and there is nothing to publish.
+    network_mode: host
+
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /home/jadx/.cache
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+    deploy:
+      resources:
+        limits:
+          memory: ${MEMORY_LIMIT:-1g}
+          cpus: "${CPU_LIMIT:-2}"

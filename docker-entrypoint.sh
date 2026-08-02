@@ -15,6 +15,12 @@ JADX_PORT="${JADX_PORT:-8650}"
 MCP_INTERNAL_PORT="${MCP_INTERNAL_PORT:-18651}"
 JADX_MCP_ALLOW_INSECURE_BIND="${JADX_MCP_ALLOW_INSECURE_BIND:-false}"
 
+# Address the relay listens on inside the container's network namespace.
+# 0.0.0.0 is correct for bridge networking (the namespace is private, and the
+# host-side exposure is decided by MCP_PUBLISH_ADDR). Under host networking the
+# namespace IS the host, so this must be 127.0.0.1 unless OAuth is configured.
+RELAY_BIND="${RELAY_BIND:-0.0.0.0}"
+
 log() { printf '[entrypoint] %s\n' "$*" >&2; }
 
 is_loopback() {
@@ -53,8 +59,8 @@ if is_loopback "$MCP_HOST" && [[ "${JADX_MCP_ALLOW_INSECURE_BIND,,}" == "true" ]
   # (127.0.0.1:8651:8651) and never to a shared network.
   BIND_PORT="$MCP_INTERNAL_PORT"
   log "WARNING: JADX_MCP_ALLOW_INSECURE_BIND=true — exposing an UNAUTHENTICATED MCP"
-  log "         endpoint on container port ${MCP_PORT}. Use only on a trusted host."
-  socat "TCP-LISTEN:${MCP_PORT},fork,reuseaddr,bind=0.0.0.0" \
+  log "         endpoint on ${RELAY_BIND}:${MCP_PORT}. Use only on a trusted host."
+  socat "TCP-LISTEN:${MCP_PORT},fork,reuseaddr,bind=${RELAY_BIND}" \
         "TCP:127.0.0.1:${BIND_PORT}" &
   RELAY_PID=$!
 fi

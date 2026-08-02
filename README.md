@@ -382,7 +382,7 @@ See [End-to-end OAuth deployment](OAUTH.md) for required environment variables, 
 
  - [ ] Add support for hermes code (ReactNative Application)
 
- - [ ] Add docker support
+ - [x] Add docker support
 
  - [x] Add more useful MCP Tools
 
@@ -474,6 +474,17 @@ every push to `main` and every `v*.*.*` tag:
 docker pull ghcr.io/applone/jadx-mcp-server:latest
 ```
 
+Compose pulls this image rather than building — `PULL_POLICY` in `.env` controls
+when (`missing` by default; `always` keeps a moving tag like `latest` fresh).
+Building from the checkout is opt-in.
+
+While the repository is private the package is private too, so authenticate
+once on the server with a token that has `read:packages`:
+
+```bash
+echo "$GITHUB_TOKEN" | docker login ghcr.io -u YOUR_USERNAME --password-stdin
+```
+
 ### Quick start
 
 ```bash
@@ -498,9 +509,11 @@ See `.env.example` for the full annotated list. The most common ones:
 | `MCP_PORT` | `8651` | Port the MCP endpoint is served on |
 | `MCP_HOST` | `127.0.0.1` | Bind address **inside** the container |
 | `MCP_PUBLISH_ADDR` | `127.0.0.1` | Host interface the port is published on |
-| `JADX_MCP_ALLOW_INSECURE_BIND` | `true` | Expose the loopback listener without OAuth (local dev only) |
+| `JADX_MCP_ALLOW_INSECURE_BIND` | `true` | Expose the loopback listener without OAuth |
+| `RELAY_BIND` | `0.0.0.0` | Relay bind address inside the namespace — set `127.0.0.1` for host networking |
 | `JADX_HOST` / `JADX_PORT` | `host.docker.internal` / `8650` | Where the JADX plugin listens |
 | `IMAGE_TAG` | `latest` | Image tag to run — pin to a version for reproducibility |
+| `PULL_POLICY` | `missing` | When to pull from GHCR; `build` to build locally instead |
 
 ### A note on binding and authentication
 
@@ -517,11 +530,59 @@ container honours that rule:
   variables (see [OAUTH.md](OAUTH.md)). Starting without them fails fast with a
   clear error rather than exposing the endpoint.
 
+### Remote server + SSH tunnel
+
+Running the server on a remote box while JADX-GUI stays on your workstation is a
+supported topology, but it needs the host-networking variant. An SSH reverse
+tunnel binds the *server's* loopback, and a bridge-networked container cannot
+reach that; sharing the host's network namespace fixes it.
+
+On the server, in `.env`:
+
+```ini
+JADX_HOST=127.0.0.1            # the tunnel endpoint
+JADX_PORT=8650
+RELAY_BIND=127.0.0.1           # keep MCP off the server's public interfaces
+JADX_MCP_ALLOW_INSECURE_BIND=true
+```
+
+```bash
+docker compose -f docker-compose.host-net.yml up -d
+```
+
+From your workstation, with JADX-GUI running and the AI MCP plugin active,
+open one SSH connection that carries both directions:
+
+```bash
+# -R : the server reaches your JADX plugin
+# -L : you reach the server's MCP endpoint
+ssh -N \
+  -R 8650:127.0.0.1:8650 \
+  -L 8651:127.0.0.1:8651 \
+  user@your-server
+```
+
+Point your MCP client at `http://127.0.0.1:8651/mcp` locally. Both ends stay on
+loopback and nothing is published to the internet, so no OAuth setup is needed —
+the tunnel is doing the authentication. Add `-o ExitOnForwardFailure=yes` if you
+want the SSH command to fail loudly rather than connect with a dead forward.
+
+If you would rather keep bridge networking, the alternative is to bind the
+reverse tunnel to the Docker bridge gateway
+(`ssh -R 172.17.0.1:8650:127.0.0.1:8650`), which requires
+`GatewayPorts clientspecified` in the server's `sshd_config`. Host networking
+avoids touching sshd.
+
 ### Building locally
+
+Only needed when you have changed the source or want to verify the image
+yourself — otherwise the published image is used:
 
 ```bash
 docker compose up -d --build
 ```
+
+Set `PULL_POLICY=build` in `.env` to make that the permanent behaviour.
 
 The image runs as a non-root user with a read-only root filesystem, all
 capabilities dropped, and `no-new-privileges` set. Published images are signed
