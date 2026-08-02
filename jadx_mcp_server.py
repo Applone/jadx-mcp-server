@@ -55,6 +55,14 @@ from src.server.oauth import (
 public_oauth_settings = PublicOAuthSettings.from_environment()
 public_oauth = build_public_auth(public_oauth_settings)
 
+# The three tool tiers are gated on scope names the operator can rename (some
+# providers cannot mint `jadx:read`). Rebinding the imported defaults here means
+# every @mcp.tool decorator below picks up the configured vocabulary without
+# each one having to reach into settings.
+READ_SCOPE = public_oauth_settings.read_scope
+WRITE_SCOPE = public_oauth_settings.write_scope
+DEBUG_SCOPE = public_oauth_settings.debug_scope
+
 
 def _tool_auth(scope: str):
     """Keep existing stdio workflows open while enforcing scopes for HTTP OAuth mode."""
@@ -398,6 +406,17 @@ def main():
             "Public MCP OAuth is enabled in %s mode for %s",
             public_oauth_settings.mode,
             public_oauth_settings.base_url,
+        )
+        logger.info(
+            "Advertised scopes: %s | required on every token: %s",
+            ", ".join(public_oauth_settings.scopes_supported),
+            ", ".join(public_oauth_settings.required_scopes) or "none",
+        )
+        logger.info(
+            "Tool scopes: read=%s write=%s debug=%s",
+            public_oauth_settings.read_scope,
+            public_oauth_settings.write_scope,
+            public_oauth_settings.debug_scope,
         )
     if config.plugin_oauth_enabled():
         logger.info("Java plugin calls use a separate client-credentials token for the configured plugin resource")

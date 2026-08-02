@@ -61,7 +61,73 @@ uv run jadx_mcp_server.py --http --host 127.0.0.1 --port 8651
 | Cache clear and all renaming or refactoring tools | `jadx:write` |
 | Debugger tools | `jadx:debug` |
 
+These three names are defaults, not fixed values — see [Customising scopes](#customising-scopes) if your provider needs `openid` or cannot mint `jadx:`-prefixed scopes.
+
 The FastMCP server validates public JWTs through the configured issuer and JWKS, or can use `JADX_MCP_OAUTH_PUBLIC_TOKEN_VALIDATION=introspection` with `JADX_MCP_OAUTH_PUBLIC_INTROSPECTION_URL`, `JADX_MCP_OAUTH_PUBLIC_INTROSPECTION_CLIENT_ID`, and `JADX_MCP_OAUTH_PUBLIC_INTROSPECTION_CLIENT_SECRET`. Both paths enforce the configured issuer and expected audience before scopes are evaluated.
+
+### Customising scopes
+
+Three settings control three genuinely different things. Getting them confused is the usual cause of a login that succeeds but leaves every tool returning 403.
+
+| Variable | Question it answers | Default |
+|---|---|---|
+| `JADX_MCP_OAUTH_SCOPES_SUPPORTED` | Which scopes may a client be granted? Advertised in the protected-resource metadata and, in proxy mode, the set a registering client may ask for. | `jadx:read,jadx:write,jadx:debug` |
+| `JADX_MCP_OAUTH_EXTRA_SCOPES` | Same list, but appended to the defaults instead of replacing them. Duplicates are collapsed. | empty |
+| `JADX_MCP_OAUTH_REQUIRED_SCOPES` | Which scopes must every presented token carry? **In proxy mode this is also the scope set requested from the upstream provider** when a client registers without naming its own. | empty |
+
+The per-tier scope names are overridable too, for providers whose scope vocabulary cannot express `jadx:read`:
+
+| Variable | Default |
+|---|---|
+| `JADX_MCP_OAUTH_READ_SCOPE` | `jadx:read` |
+| `JADX_MCP_OAUTH_WRITE_SCOPE` | `jadx:write` |
+| `JADX_MCP_OAUTH_DEBUG_SCOPE` | `jadx:debug` |
+
+A tool scope that is not in the advertised list is rejected at startup. Such a tier could never be granted — the provider would have no way to learn the scope exists — so the server fails fast rather than serving an endpoint where those tools always 403.
+
+#### Authelia and other OIDC providers
+
+OIDC providers reject an authorization request that omits `openid`. Advertise the OIDC scopes and require the ones the provider expects:
+
+```bash
+export JADX_MCP_OAUTH_EXTRA_SCOPES=openid,profile,email,groups
+export JADX_MCP_OAUTH_REQUIRED_SCOPES=openid,profile,email
+```
+
+`REQUIRED_SCOPES` is the load-bearing one in proxy mode: FastMCP's `OAuthProxy` builds the scope string it registers clients with from the required-scope list, so this is what puts `openid` on the wire. Listing a scope there also means every token must carry it — which is what you want for `openid`, since the provider grants it on every successful login.
+
+The matching Authelia client, with a custom scope defined for each tool tier:
+
+```yaml
+identity_providers:
+  oidc:
+    scopes:
+      jadx:read: {}
+      jadx:write: {}
+      jadx:debug: {}
+    clients:
+      - client_id: jadx-mcp
+        client_name: JADX MCP Server
+        client_secret: '$pbkdf2-sha512$...'
+        redirect_uris:
+          - https://mcp.example.com/auth/callback
+        scopes: [openid, profile, email, groups, 'jadx:read', 'jadx:write', 'jadx:debug']
+        audience: [https://mcp.example.com/mcp]
+        userinfo_signed_response_alg: none
+```
+
+If defining custom scopes is not an option, map the tiers onto scopes the provider already issues:
+
+```bash
+export JADX_MCP_OAUTH_SCOPES_SUPPORTED=openid,profile,email,groups
+export JADX_MCP_OAUTH_READ_SCOPE=profile
+export JADX_MCP_OAUTH_WRITE_SCOPE=email
+export JADX_MCP_OAUTH_DEBUG_SCOPE=groups
+```
+
+That works, but it overloads scopes that mean something else to every other client of the same provider, and anyone holding a `profile` scope gets read access to your decompiled code. Prefer dedicated scopes where you can define them.
+
+The Java plugin bridge keeps its own scope list in `JADX_PLUGIN_OAUTH_SCOPES`; renaming the public tool scopes does not change it, since the plugin is a separate resource with its own authorization server registration.
 
 ## Java plugin bridge token
 

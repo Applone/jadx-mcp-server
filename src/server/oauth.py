@@ -70,6 +70,14 @@ def _csv(value: str | None, default: Sequence[str] = ()) -> tuple[str, ...]:
     return values
 
 
+def _dedupe(values: Sequence[str]) -> tuple[str, ...]:
+    """Collapse duplicates while preserving the order the operator wrote them in."""
+    seen: dict[str, None] = {}
+    for value in values:
+        seen.setdefault(value, None)
+    return tuple(seen)
+
+
 def _validate_url(value: str, setting: str, allow_insecure_loopback: bool) -> str:
     parsed = urlparse(value)
     if parsed.scheme not in {"https", "http"} or not parsed.netloc or parsed.username or parsed.password:
@@ -125,6 +133,19 @@ class PublicOAuthSettings:
     extra_authorize_params: dict[str, str] | None = None
     extra_token_params: dict[str, str] | None = None
     allow_insecure_loopback: bool = False
+    # Scopes advertised to clients in the protected-resource metadata and, in
+    # proxy mode, the set a registering client is allowed to ask for.
+    scopes_supported: tuple[str, ...] = SUPPORTED_SCOPES
+    # Scopes every presented token must carry. In proxy mode this doubles as
+    # the scope set requested upstream when a client registers without asking
+    # for specific scopes, which is how providers that mandate `openid` (such
+    # as Authelia) get it.
+    required_scopes: tuple[str, ...] = ()
+    # Scope names gating the three tool tiers. Overridable for providers whose
+    # scope vocabulary cannot express `jadx:read` and friends.
+    read_scope: str = READ_SCOPE
+    write_scope: str = WRITE_SCOPE
+    debug_scope: str = DEBUG_SCOPE
 
     @classmethod
     def from_environment(cls, environ: Mapping[str, str] | None = None) -> "PublicOAuthSettings":
@@ -160,6 +181,48 @@ class PublicOAuthSettings:
             for server in authorization_servers
         )
 
+        # --- Scope configuration -------------------------------------------
+        # Two independent lists, because they answer different questions:
+        #   scopes_supported — what a client MAY be granted (advertised)
+        #   required_scopes  — what a token MUST carry (enforced), and in proxy
+        #                      mode the default scope set asked of the upstream
+        #                      provider during client registration
+        scopes_supported = _csv(env.get("JADX_MCP_OAUTH_SCOPES_SUPPORTED"), SUPPORTED_SCOPES)
+        scopes_supported = _dedupe(scopes_supported + _csv(env.get("JADX_MCP_OAUTH_EXTRA_SCOPES"), ()))
+        required_scopes = _dedupe(_csv(env.get("JADX_MCP_OAUTH_REQUIRED_SCOPES"), ()))
+
+        read_scope = _trimmed(env.get("JADX_MCP_OAUTH_READ_SCOPE")) or READ_SCOPE
+        write_scope = _trimmed(env.get("JADX_MCP_OAUTH_WRITE_SCOPE")) or WRITE_SCOPE
+        debug_scope = _trimmed(env.get("JADX_MCP_OAUTH_DEBUG_SCOPE")) or DEBUG_SCOPE
+
+        # A tool tier gated on a scope the server never advertises can never be
+        # satisfied: the provider has no way to learn the scope exists, so every
+        # call to that tier would 403 with nothing in the metadata to explain it.
+        ungrantable = [
+            f"{name}={value}"
+            for name, value in (
+                ("JADX_MCP_OAUTH_READ_SCOPE", read_scope),
+                ("JADX_MCP_OAUTH_WRITE_SCOPE", write_scope),
+                ("JADX_MCP_OAUTH_DEBUG_SCOPE", debug_scope),
+            )
+            if value not in scopes_supported
+        ]
+        if ungrantable:
+            raise OAuthConfigurationError(
+                "tool scopes must appear in the advertised scope list; "
+                + ", ".join(ungrantable)
+                + f" missing from {', '.join(scopes_supported)}. "
+                "Add them via JADX_MCP_OAUTH_SCOPES_SUPPORTED or JADX_MCP_OAUTH_EXTRA_SCOPES."
+            )
+
+        unadvertised_required = [scope for scope in required_scopes if scope not in scopes_supported]
+        if unadvertised_required:
+            raise OAuthConfigurationError(
+                "JADX_MCP_OAUTH_REQUIRED_SCOPES contains scopes that are not advertised: "
+                + ", ".join(unadvertised_required)
+                + ". Add them via JADX_MCP_OAUTH_SCOPES_SUPPORTED or JADX_MCP_OAUTH_EXTRA_SCOPES."
+            )
+
         settings = cls(
             mode=mode,
             base_url=base_url,
@@ -184,6 +247,11 @@ class PublicOAuthSettings:
             extra_authorize_params=_parse_json_object(env, "JADX_MCP_OAUTH_UPSTREAM_EXTRA_AUTHORIZE_PARAMS"),
             extra_token_params=_parse_json_object(env, "JADX_MCP_OAUTH_UPSTREAM_EXTRA_TOKEN_PARAMS"),
             allow_insecure_loopback=allow_insecure_loopback,
+            scopes_supported=scopes_supported,
+            required_scopes=required_scopes,
+            read_scope=read_scope,
+            write_scope=write_scope,
+            debug_scope=debug_scope,
         )
         if mode == "proxy":
             required_proxy_settings = {
@@ -387,7 +455,7 @@ def build_public_auth(settings: PublicOAuthSettings):
             token_verifier=verifier,
             authorization_servers=[AnyHttpUrl(server) for server in settings.authorization_servers],
             base_url=settings.base_url,
-            scopes_supported=list(SUPPORTED_SCOPES),
+            scopes_supported=list(settings.scopes_supported),
             resource_name="JADX MCP Server",
         )
     if settings.mode == "proxy":
@@ -412,7 +480,7 @@ def build_public_auth(settings: PublicOAuthSettings):
             token_verifier=verifier,
             base_url=settings.base_url,
             allowed_client_redirect_uris=list(settings.allowed_client_redirect_uris),
-            valid_scopes=list(SUPPORTED_SCOPES),
+            valid_scopes=list(settings.scopes_supported),
             forward_pkce=True,
             jwt_signing_key=settings.proxy_jwt_signing_key,
             extra_authorize_params=authorize_params,
@@ -422,7 +490,11 @@ def build_public_auth(settings: PublicOAuthSettings):
 
 
 def _build_token_verifier(settings: PublicOAuthSettings) -> TokenVerifier:
-    required_scopes: list[str] | None = None
+    # Only constrain tokens when the operator asked for it; FastMCP normalises
+    # an unset value to []. Note this list is also what OAuthProxy uses as the
+    # default scope string when registering clients upstream, so it is the knob
+    # that puts `openid` on the wire for providers that demand it.
+    required_scopes: list[str] | None = list(settings.required_scopes) or None
     if settings.validation_mode == "jwt":
         assert settings.jwks_uri is not None
         audience = settings.upstream_audience if settings.mode == "proxy" else settings.audience
