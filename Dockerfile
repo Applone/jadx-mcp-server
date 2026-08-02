@@ -35,6 +35,13 @@ RUN apt-get update \
 RUN groupadd --system --gid 10001 jadx \
     && useradd --system --uid 10001 --gid jadx --create-home --home-dir /home/jadx jadx
 
+# In OAuth proxy mode FastMCP persists dynamically registered clients under its
+# home directory. The root filesystem is read-only, so point that at a
+# dedicated path the compose files back with a volume. Without this the server
+# dies at startup with "Read-only file system: /home/jadx/.local".
+RUN mkdir -p /data && chown jadx:jadx /data
+VOLUME ["/data"]
+
 WORKDIR /app
 
 COPY --from=builder --chown=jadx:jadx /app/.venv /app/.venv
@@ -45,6 +52,7 @@ COPY --chown=jadx:jadx docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 ENV PATH="/app/.venv/bin:${PATH}" \
+    FASTMCP_HOME=/data \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     MCP_PORT=8651 \

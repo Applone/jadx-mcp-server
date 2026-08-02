@@ -514,6 +514,7 @@ See `.env.example` for the full annotated list. The most common ones:
 | `JADX_HOST` / `JADX_PORT` | `host.docker.internal` / `8650` | Where the JADX plugin listens |
 | `IMAGE_TAG` | `latest` | Image tag to run — pin to a version for reproducibility |
 | `PULL_POLICY` | `missing` | When to pull from GHCR; `build` to build locally instead |
+| `FASTMCP_HOME` | `/data` | Where OAuth proxy client registrations persist (backed by the `jadx-mcp-data` volume) |
 
 ### A note on binding and authentication
 

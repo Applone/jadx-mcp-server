@@ -40,6 +40,13 @@ services:
     tmpfs:
       - /tmp
       - /home/jadx/.cache
+
+    # FastMCP's OAuth proxy persists dynamically registered clients here
+    # (FASTMCP_HOME=/data in the image). A named volume rather than tmpfs so
+    # registrations survive a restart — otherwise every MCP client holding a
+    # cached client_id gets invalid_client until it re-registers.
+    volumes:
+      - jadx-mcp-data:/data
     cap_drop:
       - ALL
     security_opt:
@@ -50,3 +57,6 @@ services:
         limits:
           memory: ${MEMORY_LIMIT:-1g}
           cpus: "${CPU_LIMIT:-2}"
+
+volumes:
+  jadx-mcp-data:
