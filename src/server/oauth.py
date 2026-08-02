@@ -16,10 +16,13 @@ from typing import Any, Callable, Mapping, Sequence
 from urllib.parse import quote_plus, urlparse
 
 import httpx
+import logging
 from fastmcp.server.auth import JWTVerifier, OAuthProxy, RemoteAuthProvider, TokenVerifier
 from fastmcp.server.auth.providers.introspection import IntrospectionTokenVerifier
 from pydantic import AnyHttpUrl
 
+
+logger = logging.getLogger("jadx-mcp-server.oauth")
 
 READ_SCOPE = "jadx:read"
 WRITE_SCOPE = "jadx:write"
@@ -432,16 +435,47 @@ class AudienceBoundIntrospectionVerifier(IntrospectionTokenVerifier):
         if access_token is None:
             return None
         claims = access_token.claims
-        if claims.get("iss") != self._expected_issuer:
+
+        # RFC 7662 marks `iss` OPTIONAL, and a plain JSON introspection response
+        # from any fosite-based provider (Authelia among them) omits it — those
+        # servers only emit `iss` in the JWT-formatted response variant. A
+        # missing claim is therefore not evidence of a wrong issuer, and
+        # rejecting on absence makes introspection mode unusable against such
+        # providers. The introspection endpoint is operator-configured and
+        # called with client credentials, so the issuer is already established
+        # by which server answered; enforce the claim only when it is asserted.
+        issuer = claims.get("iss")
+        if issuer is not None and issuer != self._expected_issuer:
+            logger.error(
+                "Token rejected: introspection issuer %r does not match the expected %r",
+                issuer,
+                self._expected_issuer,
+            )
             return None
+
         audience = claims.get("aud")
         if isinstance(audience, str):
             audiences = {audience}
         elif isinstance(audience, list):
             audiences = {value for value in audience if isinstance(value, str)}
         else:
+            logger.error(
+                "Token rejected: introspection response carries no audience, expected %r. "
+                "The authorization server granted no audience for this token — check the "
+                "client's audience whitelist and its requested_audience_mode.",
+                self._expected_audience,
+            )
             return None
-        return access_token if self._expected_audience in audiences else None
+
+        if self._expected_audience not in audiences:
+            logger.error(
+                "Token rejected: audience %s does not include the expected %r",
+                sorted(audiences),
+                self._expected_audience,
+            )
+            return None
+
+        return access_token
 
 
 def build_public_auth(settings: PublicOAuthSettings):

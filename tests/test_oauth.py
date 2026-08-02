@@ -321,3 +321,60 @@ class RenamedToolScopeTests(unittest.TestCase):
             )
         finally:
             sys.modules.pop(module_name, None)
+
+
+class AudienceBoundIntrospectionVerifierTests(unittest.IsolatedAsyncioTestCase):
+    """The introspection verifier must work against RFC 7662 responses that omit `iss`."""
+
+    ISSUER = "https://auth.example.com"
+    AUDIENCE = "https://mcp.example.com/mcp"
+
+    def build_verifier(self):
+        from src.server.oauth import AudienceBoundIntrospectionVerifier
+
+        return AudienceBoundIntrospectionVerifier(
+            expected_issuer=self.ISSUER,
+            expected_audience=self.AUDIENCE,
+            introspection_url="https://auth.example.com/api/oidc/introspection",
+            client_id="client",
+            client_secret="secret",
+        )
+
+    async def verify_with_claims(self, claims: dict):
+        from unittest.mock import AsyncMock, patch
+        from fastmcp.server.auth.providers.introspection import IntrospectionTokenVerifier
+
+        token = AccessToken(
+            token="opaque", client_id="client", scopes=["jadx:read"], expires_at=None, claims=claims
+        )
+        with patch.object(IntrospectionTokenVerifier, "verify_token", AsyncMock(return_value=token)):
+            return await self.build_verifier().verify_token("opaque")
+
+    async def test_accepts_authelia_shaped_response_without_an_issuer_claim(self) -> None:
+        """Authelia's plain JSON introspection response has no `iss` — this must still pass."""
+        result = await self.verify_with_claims(
+            {"active": True, "aud": [self.AUDIENCE], "scope": "jadx:read", "client_id": "client"}
+        )
+        self.assertIsNotNone(result)
+
+    async def test_accepts_a_matching_issuer_when_present(self) -> None:
+        result = await self.verify_with_claims({"iss": self.ISSUER, "aud": [self.AUDIENCE]})
+        self.assertIsNotNone(result)
+
+    async def test_rejects_a_mismatched_issuer(self) -> None:
+        result = await self.verify_with_claims(
+            {"iss": "https://evil.example.com", "aud": [self.AUDIENCE]}
+        )
+        self.assertIsNone(result)
+
+    async def test_rejects_a_missing_audience(self) -> None:
+        result = await self.verify_with_claims({"active": True, "scope": "jadx:read"})
+        self.assertIsNone(result)
+
+    async def test_rejects_a_foreign_audience(self) -> None:
+        result = await self.verify_with_claims({"aud": ["https://other.example.com/mcp"]})
+        self.assertIsNone(result)
+
+    async def test_accepts_a_string_audience(self) -> None:
+        result = await self.verify_with_claims({"aud": self.AUDIENCE})
+        self.assertIsNotNone(result)
