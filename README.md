@@ -334,42 +334,47 @@ There are **two separate connections** and each has its own host/port:
 uv run jadx_mcp_server.py --http
 ```
 
-**Scenario 2 — Docker container or WSL (MCP server accessible from host network):**
-```bash
-# MCP server listens on ALL interfaces so the host can reach it
-# JADX plugin is still on the same machine
-uv run jadx_mcp_server.py --http --host 0.0.0.0
+**Scenario 2 — Public HTTP deployment:**
+```text
+Configure OAuth as documented in OAUTH.md and terminate HTTPS at a reverse proxy.
+Keep the Python server and Java plugin on loopback whenever the proxy can reach them.
 ```
 
 **Scenario 3 — JADX-GUI running on a different machine (e.g., remote VM):**
 ```bash
-# MCP server runs locally, but connects to JADX plugin on a remote machine
-uv run jadx_mcp_server.py --http --jadx-host 192.168.1.100
+# The Java plugin remains loopback-only. Tunnel it to the MCP server host.
+ssh -N -L 8650:127.0.0.1:8650 user@remote-jadx-host
+uv run jadx_mcp_server.py --http --jadx-host 127.0.0.1 --jadx-port 8650
 ```
 
-**Scenario 4 — Full remote setup (everything on different machines):**
-```bash
-# MCP server listens on all interfaces on port 9999
-# JADX plugin is on a different machine at 192.168.1.100:8652
-uv run jadx_mcp_server.py --http --host 0.0.0.0 --port 9999 --jadx-host 192.168.1.100 --jadx-port 8652
+**Scenario 4 — Public MCP access:**
+```text
+Keep the Java plugin loopback-only. Expose only the Python Streamable HTTP server through
+TLS and the configured OAuth mode. See OAUTH.md for public and internal token audiences.
 ```
 
 > [!CAUTION]
 > ### ⚠️ Security Warning — Remote Binding
 >
-> When using `--host 0.0.0.0` (or any non-localhost address), the MCP server binds to **all network interfaces** over **plain HTTP with no authentication**. This means:
+> When using `--host 0.0.0.0` (or any non-localhost address) without OAuth, the MCP server binds to **all network interfaces** over **plain HTTP with no authentication**. This means:
 >
 > - **Anyone on the network** can connect and invoke all MCP tools
 > - There is **no TLS encryption** — traffic can be intercepted
 > - An attacker can use the server to **read decompiled code**, **rename classes/methods**, and **access debug info**
 >
 > **Mitigations:**
-> - Only bind to `0.0.0.0` on **trusted, isolated networks** (e.g., Docker bridge, local VM)
-> - Use a **firewall** to restrict access to the MCP port
-> - Consider an **SSH tunnel** instead: `ssh -L 8651:127.0.0.1:8651 remote-host`
+> - Enable the documented OAuth HTTP mode and place the server behind a TLS-terminating proxy
+> - Use a firewall to restrict access to the MCP port
+> - Consider an SSH tunnel instead: `ssh -L 8651:127.0.0.1:8651 remote-host`
 >
-> Similarly, `--jadx-host` with a non-localhost address means the MCP server will make **unauthenticated HTTP requests** to that host. Ensure the target is trusted.
+> The Java plugin is a separate protected resource. Configure a second bridge service token for it; do not forward an MCP client token to `--jadx-host`.
 
+
+## OAuth authorization
+
+The server supports both DCR-capable identity providers and fixed-client OAuth proxy mode for the public Streamable HTTP MCP endpoint. It can also obtain a separate client-credentials token for the Java plugin, preserving OAuth resource audiences between the public MCP server and the internal plugin API.
+
+See [End-to-end OAuth deployment](OAUTH.md) for required environment variables, scope mappings, Java plugin settings, and production deployment guidance.
 
 ## 🛣️ Future Roadmap
 

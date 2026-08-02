@@ -15,10 +15,16 @@ import json
 import sys
 from typing import Union, Dict, Any
 
+from .oauth import PluginAccessTokenClient, PluginTokenError, PluginTokenSettings
+
 # Default Configuration
 JADX_HOST = "127.0.0.1"
 JADX_PORT = 8650
 JADX_HTTP_BASE = f"http://{JADX_HOST}:{JADX_PORT}"
+
+# The public MCP token and the Java plugin token have separate audiences. The
+# bridge acquires a dedicated client-credentials token only when configured.
+_plugin_token_client = PluginAccessTokenClient(PluginTokenSettings.from_environment())
 
 # HTTP read timeouts (seconds) for plugin communication
 JADX_DEFAULT_TIMEOUT = 60.0
@@ -53,6 +59,22 @@ def set_jadx_host(host: str):
     global JADX_HOST
     JADX_HOST = host
     _rebuild_jadx_http_base()
+
+
+def configure_plugin_oauth(settings: PluginTokenSettings | None = None) -> None:
+    """Configure the dedicated client used to obtain plugin-audience access tokens."""
+    global _plugin_token_client
+    _plugin_token_client = PluginAccessTokenClient(settings or PluginTokenSettings.from_environment())
+
+
+def plugin_oauth_enabled() -> bool:
+    """Return whether plugin API calls will use a separate OAuth service token."""
+    return _plugin_token_client.enabled
+
+
+async def plugin_authorization_headers() -> Dict[str, str]:
+    """Return a cached bearer token for the Java plugin resource, if configured."""
+    return await _plugin_token_client.authorization_headers()
 
 
 def set_jadx_port(port: int):
@@ -114,8 +136,9 @@ async def get_from_jadx(
     params = params or {}
     url = f"{JADX_HTTP_BASE}/{endpoint.lstrip('/')}"
     try:
+        headers = await plugin_authorization_headers()
         async with httpx.AsyncClient(trust_env=False) as client:
-            resp = await client.get(url, params=params, timeout=timeout)
+            resp = await client.get(url, params=params, timeout=timeout, headers=headers)
             resp.raise_for_status()
 
             # Try to parse JSON, fallback to text if not valid JSON
@@ -123,6 +146,11 @@ async def get_from_jadx(
                 return resp.json()
             except json.JSONDecodeError:
                 return {"response": resp.text}
+
+    except PluginTokenError as e:
+        error_msg = f"Unable to authorize the JADX plugin request: {e}"
+        logger.error(error_msg)
+        return {"error": error_msg}
 
     except httpx.HTTPStatusError as e:
         error_msg = f"HTTP error {e.response.status_code}: {e.response.text}"
@@ -159,13 +187,18 @@ async def post_to_jadx(endpoint: str, params: Dict[str, Any] = None) -> Union[st
     params = params or {}
     url = f"{JADX_HTTP_BASE}/{endpoint.lstrip('/')}"
     try:
+        headers = await plugin_authorization_headers()
         async with httpx.AsyncClient(trust_env=False) as client:
-            resp = await client.post(url, params=params, timeout=30)
+            resp = await client.post(url, params=params, timeout=30, headers=headers)
             resp.raise_for_status()
             try:
                 return resp.json()
             except json.JSONDecodeError:
                 return {"response": resp.text}
+    except PluginTokenError as e:
+        error_msg = f"Unable to authorize the JADX plugin request: {e}"
+        logger.error(error_msg)
+        return {"error": error_msg}
     except httpx.TimeoutException:
         return {
             "error": (
@@ -190,8 +223,9 @@ async def get_search_progress() -> Dict[str, Any]:
     """
     url = f"{JADX_HTTP_BASE}/search-progress"
     try:
+        headers = await plugin_authorization_headers()
         async with httpx.AsyncClient(trust_env=False) as client:
-            resp = await client.get(url, timeout=5)
+            resp = await client.get(url, timeout=5, headers=headers)
             resp.raise_for_status()
             return resp.json()
     except Exception:

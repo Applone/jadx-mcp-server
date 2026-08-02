@@ -1,2 +1,8 @@
 """JADX MCP Server"""
-from .config import set_jadx_host, set_jadx_port, health_ping
+from .config import (
+    configure_plugin_oauth,
+    health_ping,
+    plugin_oauth_enabled,
+    set_jadx_host,
+    set_jadx_port,
+)
