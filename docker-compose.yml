@@ -1,0 +1,52 @@
+# Run the JADX MCP server in a container.
+#
+#   cp .env.example .env && docker compose up -d
+#
+# All configuration lives in .env — this file only wires it up. To build from
+# source instead of pulling the published image:
+#
+#   docker compose up -d --build
+
+services:
+  jadx-mcp-server:
+    image: ${IMAGE:-ghcr.io/applone/jadx-mcp-server}:${IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: jadx-mcp-server
+    restart: unless-stopped
+
+    # Every setting comes from .env; nothing is hardcoded here.
+    env_file:
+      - .env
+
+    ports:
+      - "${MCP_PUBLISH_ADDR:-127.0.0.1}:${MCP_PORT:-8651}:${MCP_PORT:-8651}"
+
+    # JADX-GUI runs on the host, so host.docker.internal must resolve on Linux
+    # too (Docker Desktop provides it natively).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    # The server only reads decompiled data over HTTP — it needs no write access
+    # to its own filesystem and no added capabilities.
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /home/jadx/.cache
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+    deploy:
+      resources:
+        limits:
+          memory: ${MEMORY_LIMIT:-1g}
+          cpus: "${CPU_LIMIT:-2}"
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

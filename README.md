@@ -462,3 +462,67 @@ Use responsibly. Respect intellectual property. Follow ethical hacking practices
 ---
 
 Built with ❤️ for the reverse engineering and AI communities.
+
+---
+
+## 🐳 Running in Docker
+
+Prebuilt multi-arch images (`linux/amd64`, `linux/arm64`) are published to GHCR on
+every push to `main` and every `v*.*.*` tag:
+
+```bash
+docker pull ghcr.io/applone/jadx-mcp-server:latest
+```
+
+### Quick start
+
+```bash
+cp .env.example .env      # edit if needed — .env is git-ignored
+docker compose up -d
+```
+
+The MCP endpoint is then served at `http://127.0.0.1:8651/mcp`.
+
+JADX-GUI (with the AI MCP plugin) keeps running **on the host**, not in the
+container. The container reaches it through `host.docker.internal:8650`; the
+compose file maps that name to the host gateway so it works on Linux too. Point
+`JADX_HOST` / `JADX_PORT` elsewhere if your JADX instance is remote.
+
+### Configuration
+
+All settings live in `.env` — `docker-compose.yml` contains no hardcoded values.
+See `.env.example` for the full annotated list. The most common ones:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `MCP_PORT` | `8651` | Port the MCP endpoint is served on |
+| `MCP_HOST` | `127.0.0.1` | Bind address **inside** the container |
+| `MCP_PUBLISH_ADDR` | `127.0.0.1` | Host interface the port is published on |
+| `JADX_MCP_ALLOW_INSECURE_BIND` | `true` | Expose the loopback listener without OAuth (local dev only) |
+| `JADX_HOST` / `JADX_PORT` | `host.docker.internal` / `8650` | Where the JADX plugin listens |
+| `IMAGE_TAG` | `latest` | Image tag to run — pin to a version for reproducibility |
+
+### A note on binding and authentication
+
+The server refuses to bind a non-loopback address unless an OAuth mode is
+configured, so an unauthenticated MCP endpoint is never silently exposed. The
+container honours that rule:
+
+- **Local development** — leave `MCP_HOST=127.0.0.1` and
+  `JADX_MCP_ALLOW_INSECURE_BIND=true`. The server stays loopback-bound and an
+  in-container relay forwards the published port to it. There is **no
+  authentication** in this mode, so keep `MCP_PUBLISH_ADDR=127.0.0.1`.
+- **Shared or remote deployment** — set `JADX_MCP_ALLOW_INSECURE_BIND=false`,
+  `MCP_HOST=0.0.0.0`, and configure `JADX_MCP_OAUTH_MODE` plus the related
+  variables (see [OAUTH.md](OAUTH.md)). Starting without them fails fast with a
+  clear error rather than exposing the endpoint.
+
+### Building locally
+
+```bash
+docker compose up -d --build
+```
+
+The image runs as a non-root user with a read-only root filesystem, all
+capabilities dropped, and `no-new-privileges` set. Published images are signed
+with cosign (keyless) and carry SLSA build provenance and an SBOM.

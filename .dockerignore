@@ -1,0 +1,10 @@
+*
+!pyproject.toml
+!uv.lock
+!requirements.txt
+!jadx_mcp_server.py
+!src/
+!docker-entrypoint.sh
+
+**/__pycache__/
+**/*.py[cod]

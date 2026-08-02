@@ -57,3 +57,7 @@ target/
 
 ### dependecy ###
 lib/
+
+# Local container configuration
+.env
+!.env.example
